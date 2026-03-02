@@ -6,10 +6,34 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/mail"
+	"strconv"
 	"time"
+
+	"github.com/google/uuid"
 )
 
 const maxBodyBytes = 1024 * 1024
+
+type User struct {
+	Name  string
+	Email string
+}
+
+type ApiError struct {
+	Code      int    `json:"code"`
+	Message   string `json:"message"`
+	RequestId string `json:"request_id"`
+}
+
+type ErrorResponse struct {
+	Error ApiError `json:"error"`
+}
+
+var users = map[int]User{
+	1: {Name: "Eugene", Email: "eugene@gmail.com"},
+	2: {Name: "Goga", Email: "goga@gmail.com"},
+}
 
 func readJSON(w http.ResponseWriter, r *http.Request, data any) error {
 	r.Body = http.MaxBytesReader(w, r.Body, maxBodyBytes)
@@ -45,7 +69,34 @@ func writeJSON(w http.ResponseWriter, status int, data any) {
 }
 
 func writeError(w http.ResponseWriter, status int, msg string) {
-	writeJSON(w, status, map[string]string{"error": msg})
+	response := ErrorResponse{
+		Error: ApiError{
+			Code:      status,
+			Message:   msg,
+			RequestId: uuid.New().String(),
+		},
+	}
+	writeJSON(w, status, response)
+}
+
+func validateUser(data map[string]string) ([]string, bool) {
+	flag := true
+	var msg []string
+
+	if _, ok := data["name"]; !ok {
+		msg = append(msg, "name wasn't provided")
+		flag = false
+	}
+
+	if _, ok := data["email"]; !ok {
+		msg = append(msg, "email wasn't provided")
+		flag = false
+	} else if _, err := mail.ParseAddress(data["email"]); err != nil {
+		msg = append(msg, "invalid email")
+		flag = false
+	}
+
+	return msg, flag
 }
 
 func main() {
@@ -67,6 +118,44 @@ func main() {
 
 	mux.HandleFunc("/echo", func(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusMethodNotAllowed, "method not allowed")
+	})
+
+	mux.HandleFunc("GET /users/{id}", func(w http.ResponseWriter, r *http.Request) {
+		strID := r.PathValue("id")
+
+		id, err := strconv.Atoi(strID)
+		if err != nil {
+			writeError(w, http.StatusBadRequest, "invalid id")
+			return
+		}
+
+		if _, ok := users[id]; ok {
+			data := map[string]string{
+				"name":  users[id].Name,
+				"email": users[id].Email,
+			}
+			writeJSON(w, http.StatusOK, &data)
+		} else {
+			writeError(w, http.StatusNotFound, fmt.Sprintf("user with id %d doesn't extist", id))
+		}
+	})
+
+	mux.HandleFunc("POST /users", func(w http.ResponseWriter, r *http.Request) {
+		var data map[string]string
+		if err := readJSON(w, r, &data); err != nil {
+			writeError(w, http.StatusBadRequest, err.Error())
+			return
+		}
+
+		if msg, ok := validateUser(data); !ok {
+			for _, err := range msg {
+				writeError(w, http.StatusBadRequest, err)
+				return
+			}
+		}
+
+		response := map[string]string{"message": "login success"}
+		writeJSON(w, http.StatusOK, response)
 	})
 
 	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
