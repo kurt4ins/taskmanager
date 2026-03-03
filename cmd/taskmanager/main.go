@@ -8,31 +8,40 @@ import (
 	"net/http"
 	"net/mail"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/google/uuid"
+	"golang.org/x/crypto/bcrypt"
 )
 
 const maxBodyBytes = 1024 * 1024
 
+var nextId = 2
+
 type User struct {
-	Name  string
-	Email string
+	Id       int
+	Name     string
+	Email    string
+	Password []byte
 }
 
 type ApiError struct {
 	Code      int    `json:"code"`
 	Message   string `json:"message"`
-	RequestId string `json:"request_id"`
+	RequestId string `json:"request_id,omitempty"`
 }
 
 type ErrorResponse struct {
 	Error ApiError `json:"error"`
 }
 
-var users = map[int]User{
-	1: {Name: "Eugene", Email: "eugene@gmail.com"},
-	2: {Name: "Goga", Email: "goga@gmail.com"},
+var users = []User{
+	{
+		Id:    1,
+		Name:  "Eugene",
+		Email: "eugene@gmail.com",
+	},
 }
 
 func readJSON(w http.ResponseWriter, r *http.Request, data any) error {
@@ -94,9 +103,30 @@ func validateUser(data map[string]string) ([]string, bool) {
 	} else if _, err := mail.ParseAddress(data["email"]); err != nil {
 		msg = append(msg, "invalid email")
 		flag = false
+	} else {
+		for i := range users {
+			if users[i].Email == data["email"] {
+				msg = append(msg, fmt.Sprintf("user with email %s already exists", data["email"]))
+				flag = false
+			}
+		}
+	}
+
+	if _, ok := data["password"]; !ok {
+		msg = append(msg, "password wasn't provided")
+		flag = false
 	}
 
 	return msg, flag
+}
+
+func findUser(id int) (*User, bool) {
+	for i := range users {
+		if users[i].Id == id {
+			return &users[i], true
+		}
+	}
+	return nil, false
 }
 
 func main() {
@@ -120,23 +150,31 @@ func main() {
 		writeError(w, http.StatusMethodNotAllowed, "method not allowed")
 	})
 
-	mux.HandleFunc("GET /users/{id}", func(w http.ResponseWriter, r *http.Request) {
-		strID := r.PathValue("id")
-
-		id, err := strconv.Atoi(strID)
-		if err != nil {
-			writeError(w, http.StatusBadRequest, "invalid id")
-			return
+	mux.HandleFunc("GET /users", func(w http.ResponseWriter, r *http.Request) {
+		var data []map[string]string
+		for _, user := range users {
+			u := map[string]string{"id": strconv.Itoa(user.Id), "name": user.Name, "email": user.Email}
+			data = append(data, u)
 		}
 
-		if _, ok := users[id]; ok {
+		writeJSON(w, http.StatusOK, data)
+	})
+
+	mux.HandleFunc("GET /users/{id}", func(w http.ResponseWriter, r *http.Request) {
+		strId := r.PathValue("id")
+		id, err := strconv.Atoi(strId)
+		if err != nil {
+			writeError(w, http.StatusBadRequest, "invalid id provided")
+			return
+		}
+		if user, ok := findUser(id); ok {
 			data := map[string]string{
-				"name":  users[id].Name,
-				"email": users[id].Email,
+				"name":  user.Name,
+				"email": user.Email,
 			}
 			writeJSON(w, http.StatusOK, &data)
 		} else {
-			writeError(w, http.StatusNotFound, fmt.Sprintf("user with id %d doesn't extist", id))
+			writeError(w, http.StatusNotFound, fmt.Sprintf("user with id %d doesn't exist", id))
 		}
 	})
 
@@ -148,14 +186,91 @@ func main() {
 		}
 
 		if msg, ok := validateUser(data); !ok {
-			for _, err := range msg {
-				writeError(w, http.StatusBadRequest, err)
-				return
-			}
+			writeError(w, http.StatusBadRequest, strings.Join(msg, "; "))
+			return
 		}
 
-		response := map[string]string{"message": "login success"}
-		writeJSON(w, http.StatusOK, response)
+		password, err := bcrypt.GenerateFromPassword([]byte(data["password"]), bcrypt.MinCost)
+		if err != nil {
+			fmt.Printf("password hashing error: %v\n", err)
+		}
+
+		users = append(users, User{
+			Id:       nextId,
+			Name:     data["name"],
+			Email:    data["email"],
+			Password: password,
+		})
+		nextId++
+
+		response := map[string]string{"message": "user created successfully"}
+		writeJSON(w, http.StatusCreated, response)
+	})
+
+	mux.HandleFunc("PUT /users/{id}", func(w http.ResponseWriter, r *http.Request) {
+		strId := r.PathValue("id")
+		id, err := strconv.Atoi(strId)
+		if err != nil {
+			writeError(w, http.StatusNotFound, "invalid id provided")
+			return
+		}
+
+		var data map[string]string
+		if err := readJSON(w, r, &data); err != nil {
+			writeError(w, http.StatusBadRequest, err.Error())
+			return
+		}
+
+		if user, ok := findUser(id); ok {
+			password, err := bcrypt.GenerateFromPassword([]byte(data["password"]), bcrypt.MinCost)
+			if err != nil {
+				fmt.Printf("password hashing error: %v\n", err)
+			}
+			user.Name = data["name"]
+			user.Email = data["email"]
+			user.Password = password
+
+			writeJSON(w, http.StatusOK, "user credentials updated successfully")
+		} else {
+			writeError(w, http.StatusNotFound, fmt.Sprintf("user with id %d doesn't exist", id))
+		}
+
+	})
+
+	mux.HandleFunc("PATCH /users/{id}", func(w http.ResponseWriter, r *http.Request) {
+		strId := r.PathValue("id")
+		id, err := strconv.Atoi(strId)
+		if err != nil {
+			writeError(w, http.StatusNotFound, "invalid id provided")
+			return
+		}
+
+		var data map[string]string
+		if err := readJSON(w, r, &data); err != nil {
+			writeError(w, http.StatusBadRequest, err.Error())
+			return
+		}
+
+		if user, ok := findUser(id); ok {
+			if data["name"] != "" {
+				user.Name = data["name"]
+			}
+			if data["email"] != "" {
+				user.Email = data["email"]
+			}
+			if data["password"] != "" {
+				password, err := bcrypt.GenerateFromPassword([]byte(data["password"]), bcrypt.MinCost)
+				if err != nil {
+					fmt.Printf("password hashing error: %v\n", err)
+				}
+				user.Password = password
+			}
+
+			writeJSON(w, http.StatusOK, "user credentials updated successfully")
+		} else {
+			writeError(w, http.StatusNotFound, fmt.Sprintf("user with id %d doesn't exist", id))
+		}
+
 	})
 
 	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
