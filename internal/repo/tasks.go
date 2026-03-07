@@ -15,7 +15,7 @@ type Task struct {
 }
 
 type TaskRepository interface {
-	Create(ctx context.Context, task Task) (Task, error)
+	Create(ctx context.Context, task Task) (*Task, error)
 	GetById(ctx context.Context, id int) (*Task, error)
 	List(ctx context.Context, limit int, offset int) ([]Task, error)
 }
@@ -28,9 +28,9 @@ func NewTaskRepo(db *sql.DB) *TaskRepo {
 	return &TaskRepo{db: db}
 }
 
-func (r *TaskRepo) Create(ctx context.Context, task Task) (Task, error) {
+func (r *TaskRepo) Create(ctx context.Context, task Task) (*Task, error) {
 	query := `
-		insert into task (title, description, completed)
+		insert into tasks (title, description, completed)
 		values ($1, $2, $3)
 		returning id, title, description, completed
 	`
@@ -38,14 +38,14 @@ func (r *TaskRepo) Create(ctx context.Context, task Task) (Task, error) {
 	err := r.db.QueryRowContext(ctx, query, task.Title, task.Description, task.Completed).
 		Scan(&task.Id, &task.Title, &task.Description, &task.Completed)
 	if err != nil {
-		return Task{}, fmt.Errorf("TaskRepo.Create: %w", err)
+		return nil, fmt.Errorf("TaskRepo.Create: %w", err)
 	}
 
-	return task, nil
+	return &task, nil
 }
 
 func (r *TaskRepo) GetById(ctx context.Context, id int) (*Task, error) {
-	query := `select title, description, completed from task where id = $1`
+	query := `select title, description, completed from tasks where id = $1`
 
 	task := Task{Id: id}
 	err := r.db.QueryRowContext(ctx, query, id).
@@ -67,7 +67,7 @@ func (r *TaskRepo) List(ctx context.Context, limit int, offset int) ([]Task, err
 	}
 
 	query := `
-		select id, title, description, completed from task
+		select id, title, description, completed from tasks
 		order by id
 		limit $1 offset $2
 	`
