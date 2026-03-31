@@ -53,6 +53,7 @@ func main() {
 	taskH := handlers.NewTaskHandler(taskRepo, idx)
 	userH := handlers.NewUserHandler(userRepo)
 	authH := handlers.NewAuthHandler(userRepo, []byte(cfg.JWTSecret))
+	reportH := handlers.NewReportHandler(taskRepo, userRepo)
 
 	auth := middleware.Auth([]byte(cfg.JWTSecret))
 
@@ -71,6 +72,9 @@ func main() {
 	mux.HandleFunc("POST /users", userH.Create)
 	mux.HandleFunc("GET /users/{id}", userH.GetById)
 	mux.HandleFunc("GET /users", userH.List)
+
+	mux.HandleFunc("GET /reports/slow", reportH.SlowReport)
+	mux.HandleFunc("GET /dashboard", reportH.Dashboard)
 
 	mux.HandleFunc("GET /health", func(w http.ResponseWriter, r *http.Request) {
 		data := map[string]string{"status": "ok"}

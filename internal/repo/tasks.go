@@ -238,7 +238,7 @@ func (r *TaskRepo) ListByUser(ctx context.Context, userId int, limit int, offset
 
 func (r *TaskRepo) UpdateWordCount(ctx context.Context, taskID int, wordCount int) error {
 	_, err := r.db.ExecContext(ctx,
-		`UPDATE tasks SET word_count = $1 WHERE id = $2`,
+		`update tasks set word_count = $1 where id = $2`,
 		wordCount, taskID)
 	if err != nil {
 		return fmt.Errorf("TaskRepo.UpdateWordCount: %w", err)
